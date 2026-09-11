@@ -1,0 +1,43 @@
+name: Khar Zhaelyx CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install
+        run: npm install
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+      - name: Unit tests
+        run: npm test
+      - name: Production build
+        run: npm run build
+      - name: Preview smoke test
+        run: |
+          npm run preview -- --host 127.0.0.1 > /tmp/khar-preview.log 2>&1 &
+          PID=$!
+          trap 'kill $PID' EXIT
+          for i in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:4173/ > /tmp/khar-index.html; then
+              grep -q "KHAR ZHAELYX" /tmp/khar-index.html
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/khar-preview.log
+          exit 1
