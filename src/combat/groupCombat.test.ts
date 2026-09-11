@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HEROES } from '../data/heroes';
+import { resolveHeroSkill } from './heroCombat';
 import { applyDamageToEnemy, buildEnemyGroup, isGroupDefeated, replaceEnemy, selectHeroTarget, selectSplashTargets } from './groupCombat';
 
 describe('enemy groups', () => {
@@ -32,14 +33,47 @@ describe('enemy groups', () => {
     expect(rangerTarget?.id).toBe(fastest.id);
   });
 
-  it('applies Mage splash only to living secondary targets within targetCount', () => {
-    const group = buildEnemyGroup(3);
-    const primary = group[0];
-    const withDeadMiddle = replaceEnemy(group, { ...group[1], hp: 0 });
-    const splashTargets = selectSplashTargets(withDeadMiddle, primary.id, HEROES.mage.skillTargetCount);
+  it('applies real Arcane Burst primary and splash damage to living enemies', () => {
+    let group = buildEnemyGroup(6);
+    const mageSkill = resolveHeroSkill(HEROES.mage);
+    const primary = selectHeroTarget('mage', group);
+    expect(primary).toBeDefined();
+    if (!primary) throw new Error('Expected a living primary target');
+
+    const hpBefore = group.map((enemy) => enemy.hp);
+    const updatedPrimary = applyDamageToEnemy(primary, mageSkill.primaryDamage);
+    group = replaceEnemy(group, updatedPrimary);
+
+    const splashTargets = selectSplashTargets(group, primary.id, HEROES.mage.skillTargetCount);
+    expect(splashTargets).toHaveLength(1);
+    for (const secondary of splashTargets) {
+      group = replaceEnemy(group, applyDamageToEnemy(secondary, mageSkill.splashDamage));
+    }
+
+    expect(group[0].hp).toBeLessThan(hpBefore[0]);
+    expect(group[1].hp).toBeLessThan(hpBefore[1]);
+    expect(group[2].hp).toBe(hpBefore[2]);
+    expect(mageSkill.enemyDelayMs).toBe(950);
+  });
+
+  it('excludes dead enemies from Arcane Burst splash', () => {
+    const mageSkill = resolveHeroSkill(HEROES.mage);
+    let group = buildEnemyGroup(6);
+    group = replaceEnemy(group, { ...group[1], hp: 0 });
+    const primary = selectHeroTarget('mage', group);
+    expect(primary).toBeDefined();
+    if (!primary) throw new Error('Expected a living primary target');
+
+    const deadHpBefore = group[1].hp;
+    const thirdHpBefore = group[2].hp;
+    const splashTargets = selectSplashTargets(group, primary.id, HEROES.mage.skillTargetCount);
     expect(splashTargets.map((enemy) => enemy.id)).toEqual([group[2].id]);
-    const damaged = applyDamageToEnemy(splashTargets[0], 20);
-    expect(damaged.hp).toBeLessThan(splashTargets[0].hp);
-    expect(withDeadMiddle[1].hp).toBe(0);
+
+    for (const secondary of splashTargets) {
+      group = replaceEnemy(group, applyDamageToEnemy(secondary, mageSkill.splashDamage));
+    }
+
+    expect(group[1].hp).toBe(deadHpBefore);
+    expect(group[2].hp).toBeLessThan(thirdHpBefore);
   });
 });
