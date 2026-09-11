@@ -187,10 +187,12 @@ export class GameScene extends Phaser.Scene {
       const splashTargets = selectSplashTargets(this.enemies, target.id, this.hero.skillTargetCount);
       splashTargets.forEach((secondary) => {
         const updated = applyDamageToEnemy(secondary, result.splashDamage);
-        splashTotal += secondary.hp - updated.hp;
+        const splashDamage = secondary.hp - updated.hp;
+        splashTotal += splashDamage;
         splashHits.push(secondary.definition.name);
         this.enemies = replaceEnemy(this.enemies, updated);
-        this.flash(this.enemySprites.get(secondary.id), 1.11);
+        this.flash(this.enemySprites.get(secondary.id), 1.16);
+        this.showSplashFeedback(secondary.id, splashDamage);
         if (updated.hp <= 0) this.onEnemyDefeated(updated);
       });
     }
@@ -202,7 +204,7 @@ export class GameScene extends Phaser.Scene {
     this.flash(this.enemySprites.get(target.id), result.critical ? 1.22 : 1.14);
     const effects = [
       result.shield > 0 ? `shield +${result.shield}` : '',
-      splashHits.length > 0 ? `splash ${splashTotal} → ${splashHits.join(', ')}` : '',
+      splashHits.length > 0 ? `SPLASH ${splashTotal} → ${splashHits.join(', ')}` : '',
       result.enemyDelayMs > 0 ? `group delay ${result.enemyDelayMs}ms` : '',
       execute > 1 ? 'EXECUTE' : '',
     ].filter(Boolean).join(' • ');
@@ -309,6 +311,21 @@ export class GameScene extends Phaser.Scene {
       const bar = this.enemyBars.get(enemy.id);
       hpText?.setText(enemy.hp > 0 ? `${enemy.definition.name}\n${Math.ceil(enemy.hp)}/${enemy.definition.maxHp} • ${enemy.definition.trait}` : `${enemy.definition.name}\nDEFEATED`);
       if (bar) bar.width = 105 * Math.max(0, enemy.hp / enemy.definition.maxHp);
+    });
+  }
+
+  private showSplashFeedback(enemyId: string, damage: number): void {
+    const sprite = this.enemySprites.get(enemyId);
+    if (!sprite || damage <= 0) return;
+    const label = this.add.text(sprite.x, sprite.y - 58, `SPLASH -${damage}`, {
+      fontSize: '13px', color: '#9fc5ff', fontStyle: 'bold',
+    }).setOrigin(0.5);
+    this.tweens.add({
+      targets: label,
+      y: label.y - 24,
+      alpha: 0,
+      duration: 850,
+      onComplete: () => label.destroy(),
     });
   }
 
