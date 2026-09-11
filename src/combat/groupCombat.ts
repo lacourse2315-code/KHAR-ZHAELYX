@@ -12,9 +12,10 @@ export function buildEnemyGroup(stage: number): EnemyCombatant[] {
   const size = Math.min(3, safeStage);
   return Array.from({ length: size }, (_, index) => {
     const definition = getEnemyForStage(safeStage + index);
-    const scale = index === 0 ? 1 : index === 1 ? 0.78 : 0.64;
-    const maxHp = Math.max(1, Math.floor(definition.maxHp * scale));
-    const attack = Math.max(1, Math.floor(definition.attack * scale));
+    const hpScale = index === 0 ? 1 : index === 1 ? 0.72 : 0.58;
+    const attackScale = index === 0 ? 1 : index === 1 ? 0.42 : 0.28;
+    const maxHp = Math.max(1, Math.floor(definition.maxHp * hpScale));
+    const attack = Math.max(1, Math.floor(definition.attack * attackScale));
     return {
       id: `stage-${safeStage}-enemy-${index + 1}`,
       definition: { ...definition, maxHp, attack },
