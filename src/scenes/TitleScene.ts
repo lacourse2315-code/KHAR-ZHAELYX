@@ -16,7 +16,7 @@ export class TitleScene extends Phaser.Scene {
     this.add.text(480, 64, 'KHAR ZHAELYX', {
       fontFamily: 'Georgia, serif', fontSize: '48px', color: '#f4f0e6', fontStyle: 'bold',
     }).setOrigin(0.5);
-    this.add.text(480, 108, 'IDLE RPG • HERO COMBAT DEPTH', {
+    this.add.text(480, 108, 'IDLE RPG • ENEMY GROUPS', {
       fontSize: '14px', color: '#9fa8bb', letterSpacing: 4,
     }).setOrigin(0.5);
     this.add.text(480, 145, `Stage ${save.stage}  •  ${save.gold} Gold`, {

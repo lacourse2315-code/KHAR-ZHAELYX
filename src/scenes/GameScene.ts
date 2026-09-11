@@ -1,8 +1,8 @@
 import Phaser from 'phaser';
-import { damageAfterArmor, getEnemyForStage, type EnemyDefinition } from '../data/enemies';
 import { HEROES, HERO_ORDER, type HeroDefinition, type HeroId } from '../data/heroes';
-import { applyDamage, isDefeated } from '../combat/combatMath';
+import { applyDamage } from '../combat/combatMath';
 import { executeMultiplier, incomingDamageForHero, resolveHeroAttack, resolveHeroSkill } from '../combat/heroCombat';
+import { applyDamageToEnemy, buildEnemyGroup, isGroupDefeated, livingEnemies, replaceEnemy, selectHeroTarget, selectSplashTargets, type EnemyCombatant } from '../combat/groupCombat';
 import { calculateOfflineReward } from '../systems/idleSystem';
 import { buyHeroUpgrade, getHeroLevel, getUpgradedHero, heroUpgradeCost, rewardForStage } from '../systems/progressionSystem';
 import { loadSave, saveGame, type SaveData } from '../systems/saveSystem';
@@ -12,25 +12,27 @@ export class GameScene extends Phaser.Scene {
   private selectedHero: HeroId = 'warrior';
   private saveData!: SaveData;
   private hero!: HeroDefinition;
-  private enemy!: EnemyDefinition;
+  private enemies: EnemyCombatant[] = [];
   private heroHp = 1;
-  private enemyHp = 1;
   private warriorShield = 0;
   private heroAttackTimer?: Phaser.Time.TimerEvent;
-  private enemyAttackTimer?: Phaser.Time.TimerEvent;
   private skillTimer?: Phaser.Time.TimerEvent;
   private nextStageTimer?: Phaser.Time.TimerEvent;
+  private enemyTimers = new Map<string, Phaser.Time.TimerEvent>();
+  private enemySprites = new Map<string, Phaser.GameObjects.Container>();
+  private enemyHpTexts = new Map<string, Phaser.GameObjects.Text>();
+  private enemyBars = new Map<string, Phaser.GameObjects.Rectangle>();
   private heroHpText?: Phaser.GameObjects.Text;
-  private enemyHpText?: Phaser.GameObjects.Text;
   private stageText?: Phaser.GameObjects.Text;
   private goldText?: Phaser.GameObjects.Text;
   private levelText?: Phaser.GameObjects.Text;
   private skillText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
+  private targetText?: Phaser.GameObjects.Text;
+  private upgradeText?: Phaser.GameObjects.Text;
   private heroBar?: Phaser.GameObjects.Rectangle;
-  private enemyBar?: Phaser.GameObjects.Rectangle;
   private heroSprite?: Phaser.GameObjects.Container;
-  private enemySprite?: Phaser.GameObjects.Container;
+  private enemyLayer?: Phaser.GameObjects.Container;
   private running = false;
   private offlineGold = 0;
 
@@ -61,27 +63,25 @@ export class GameScene extends Phaser.Scene {
 
   private buildUi(): void {
     this.add.rectangle(480, 270, 960, 540, 0x090c14);
-    this.add.text(32, 20, 'KHAR ZHAELYX', { fontFamily: 'Georgia, serif', fontSize: '24px', color: '#f4f0e6', fontStyle: 'bold' });
-    this.goldText = this.add.text(32, 52, '', { fontSize: '15px', color: '#e5c77a' });
-    this.levelText = this.add.text(928, 52, '', { fontSize: '14px', color: '#9fa8bb' }).setOrigin(1, 0);
-    this.stageText = this.add.text(928, 20, '', { fontSize: '17px', color: '#e5c77a' }).setOrigin(1, 0);
-    this.statusText = this.add.text(480, 82, 'Preparing battle…', { fontSize: '16px', color: '#9fa8bb' }).setOrigin(0.5);
+    this.add.text(32, 18, 'KHAR ZHAELYX', { fontFamily: 'Georgia, serif', fontSize: '24px', color: '#f4f0e6', fontStyle: 'bold' });
+    this.goldText = this.add.text(32, 50, '', { fontSize: '15px', color: '#e5c77a' });
+    this.levelText = this.add.text(928, 50, '', { fontSize: '14px', color: '#9fa8bb' }).setOrigin(1, 0);
+    this.stageText = this.add.text(928, 18, '', { fontSize: '17px', color: '#e5c77a' }).setOrigin(1, 0);
+    this.statusText = this.add.text(480, 78, 'Preparing battle…', { fontSize: '15px', color: '#9fa8bb', align: 'center', wordWrap: { width: 760 } }).setOrigin(0.5);
+    this.targetText = this.add.text(480, 103, '', { fontSize: '12px', color: '#71809d' }).setOrigin(0.5);
 
-    this.add.text(220, 112, 'HERO', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
-    this.add.text(740, 112, 'ENEMY', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
-    this.heroSprite = this.createFighter(220, 220, 0x38506d, 'H');
-    this.enemySprite = this.createFighter(740, 220, 0x623c3c, 'E');
-    this.heroHpText = this.add.text(220, 290, '', { fontSize: '14px', color: '#e8edf7' }).setOrigin(0.5);
-    this.enemyHpText = this.add.text(740, 290, '', { fontSize: '14px', color: '#e8edf7' }).setOrigin(0.5);
-    this.heroBar = this.add.rectangle(220, 316, 260, 14, 0x274231).setOrigin(0.5).setStrokeStyle(1, 0x5f8069);
-    this.enemyBar = this.add.rectangle(740, 316, 260, 14, 0x4b2929).setOrigin(0.5).setStrokeStyle(1, 0x8f5a5a);
-    this.skillText = this.add.text(480, 346, '', { fontSize: '13px', color: '#b9c8ea', align: 'center' }).setOrigin(0.5);
+    this.add.text(170, 125, 'HERO', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
+    this.add.text(735, 125, 'ENEMY GROUP', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
+    this.heroSprite = this.createFighter(170, 220, 0x38506d, 'H', 54);
+    this.heroHpText = this.add.text(170, 286, '', { fontSize: '13px', color: '#e8edf7' }).setOrigin(0.5);
+    this.heroBar = this.add.rectangle(170, 311, 230, 12, 0x274231).setOrigin(0.5).setStrokeStyle(1, 0x5f8069);
+    this.enemyLayer = this.add.container(0, 0);
 
-    this.add.text(480, 370, 'AUTO COMBAT', { fontSize: '16px', color: '#e5c77a', fontStyle: 'bold' }).setOrigin(0.5);
-    const upgrade = this.add.rectangle(480, 408, 300, 38, 0x4f3c20, 1).setStrokeStyle(1, 0xe5c77a).setInteractive({ useHandCursor: true });
-    const upgradeText = this.add.text(480, 408, '', { fontSize: '13px', color: '#fff4d0', fontStyle: 'bold' }).setOrigin(0.5);
+    this.skillText = this.add.text(480, 342, '', { fontSize: '12px', color: '#b9c8ea', align: 'center', wordWrap: { width: 700 } }).setOrigin(0.5);
+    this.add.text(480, 366, 'AUTO COMBAT • AUTO TARGETING', { fontSize: '15px', color: '#e5c77a', fontStyle: 'bold' }).setOrigin(0.5);
+    const upgrade = this.add.rectangle(480, 404, 300, 36, 0x4f3c20, 1).setStrokeStyle(1, 0xe5c77a).setInteractive({ useHandCursor: true });
+    this.upgradeText = this.add.text(480, 404, '', { fontSize: '13px', color: '#fff4d0', fontStyle: 'bold' }).setOrigin(0.5);
     upgrade.on('pointerdown', () => this.upgradeSelectedHero());
-    this.registry.set('upgradeText', upgradeText);
 
     HERO_ORDER.forEach((id, index) => this.createHeroButton(id, 115 + index * 230));
     const retreat = this.add.text(480, 526, 'Return to title', { fontSize: '12px', color: '#7f899f' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
@@ -96,78 +96,145 @@ export class GameScene extends Phaser.Scene {
     button.on('pointerdown', () => { if (this.running && id !== this.selectedHero) this.switchHero(id); });
   }
 
-  private createFighter(x: number, y: number, fill: number, letter: string): Phaser.GameObjects.Container {
+  private createFighter(x: number, y: number, fill: number, letter: string, radius: number): Phaser.GameObjects.Container {
     const container = this.add.container(x, y);
     container.add([
-      this.add.circle(0, 0, 58, fill).setStrokeStyle(3, 0xb7c0d2),
-      this.add.text(0, 0, letter, { fontSize: '40px', color: '#ffffff', fontStyle: 'bold' }).setOrigin(0.5),
+      this.add.circle(0, 0, radius, fill).setStrokeStyle(3, 0xb7c0d2),
+      this.add.text(0, 0, letter, { fontSize: `${Math.floor(radius * 0.7)}px`, color: '#ffffff', fontStyle: 'bold' }).setOrigin(0.5),
     ]);
     return container;
   }
 
   private startBattle(): void {
     this.stopBattleTimers();
+    this.clearEnemyUi();
     const level = getHeroLevel(this.saveData.heroLevels, this.selectedHero);
     this.hero = getUpgradedHero(HEROES[this.selectedHero], level);
-    this.enemy = getEnemyForStage(this.stage);
+    this.enemies = buildEnemyGroup(this.stage);
     this.heroHp = this.hero.maxHp;
-    this.enemyHp = this.enemy.maxHp;
     this.warriorShield = 0;
     this.running = true;
-    this.stageText?.setText(`Stage ${this.stage}`);
-    this.statusText?.setText(`${this.hero.name} vs ${this.enemy.name} • ${this.enemy.trait}`);
+    this.stageText?.setText(`Stage ${this.stage} • ${this.enemies.length} foe${this.enemies.length > 1 ? 's' : ''}`);
+    this.statusText?.setText(`${this.hero.name} engages ${this.enemies.length > 1 ? 'an enemy group' : this.enemies[0].definition.name}.`);
+    this.buildEnemyUi();
     this.updateUi();
     this.heroAttackTimer = this.time.addEvent({ delay: this.hero.attackIntervalMs, loop: true, callback: () => this.heroAttack() });
-    this.scheduleEnemyAttack(this.enemy.attackIntervalMs);
+    this.enemies.forEach((enemy) => this.scheduleEnemyAttack(enemy.id, enemy.definition.attackIntervalMs));
     this.skillTimer = this.time.addEvent({ delay: this.hero.skillCooldownMs, loop: true, callback: () => this.useSkill() });
   }
 
-  private scheduleEnemyAttack(delay: number): void {
-    this.enemyAttackTimer?.remove(false);
-    this.enemyAttackTimer = this.time.addEvent({ delay, loop: false, callback: () => { this.enemyAttack(); if (this.running) this.scheduleEnemyAttack(this.enemy.attackIntervalMs); } });
+  private buildEnemyUi(): void {
+    const livingCount = this.enemies.length;
+    const positions = livingCount === 1 ? [735] : livingCount === 2 ? [670, 800] : [620, 735, 850];
+    this.enemies.forEach((enemy, index) => {
+      const x = positions[index];
+      const sprite = this.createFighter(x, 210, 0x623c3c, `${index + 1}`, 40);
+      const hpText = this.add.text(x, 263, '', { fontSize: '10px', color: '#e8edf7', align: 'center' }).setOrigin(0.5);
+      const bar = this.add.rectangle(x, 284, 105, 8, 0x4b2929).setOrigin(0.5).setStrokeStyle(1, 0x8f5a5a);
+      this.enemySprites.set(enemy.id, sprite);
+      this.enemyHpTexts.set(enemy.id, hpText);
+      this.enemyBars.set(enemy.id, bar);
+      this.enemyLayer?.add([sprite, hpText, bar]);
+    });
+  }
+
+  private clearEnemyUi(): void {
+    this.enemySprites.clear();
+    this.enemyHpTexts.clear();
+    this.enemyBars.clear();
+    this.enemyLayer?.removeAll(true);
+  }
+
+  private scheduleEnemyAttack(enemyId: string, delay: number): void {
+    this.enemyTimers.get(enemyId)?.remove(false);
+    const timer = this.time.addEvent({ delay, loop: false, callback: () => {
+      this.enemyAttack(enemyId);
+      const enemy = this.enemies.find((candidate) => candidate.id === enemyId);
+      if (this.running && enemy && enemy.hp > 0) this.scheduleEnemyAttack(enemyId, enemy.definition.attackIntervalMs);
+    } });
+    this.enemyTimers.set(enemyId, timer);
   }
 
   private heroAttack(): void {
-    if (!this.running || isDefeated({ hp: this.enemyHp, maxHp: this.enemy.maxHp, attack: this.enemy.attack })) return;
+    if (!this.running) return;
+    const target = selectHeroTarget(this.selectedHero, this.enemies);
+    if (!target) return;
     const result = resolveHeroAttack(this.hero);
-    const execute = executeMultiplier(this.selectedHero, this.enemyHp, this.enemy.maxHp);
-    const rawDamage = Math.floor(result.damage * execute);
-    const damage = damageAfterArmor(rawDamage, this.enemy.armor);
-    this.enemyHp = applyDamage({ hp: this.enemyHp, maxHp: this.enemy.maxHp, attack: this.enemy.attack }, damage).hp;
-    this.flash(this.enemySprite, result.critical ? 1.18 : 1.08);
-    const executeLabel = execute > 1 ? ' • EXECUTE' : '';
-    this.statusText?.setText(`${result.label}${executeLabel}! ${damage} damage`);
-    this.updateUi();
-    if (this.enemyHp <= 0) this.handleVictory();
+    const execute = executeMultiplier(this.selectedHero, target.hp, target.definition.maxHp);
+    const updated = applyDamageToEnemy(target, Math.floor(result.damage * execute));
+    const dealt = target.hp - updated.hp;
+    this.enemies = replaceEnemy(this.enemies, updated);
+    this.flash(this.enemySprites.get(target.id), result.critical ? 1.18 : 1.08);
+    if (updated.hp <= 0) this.onEnemyDefeated(updated);
+    this.statusText?.setText(`${result.label}${execute > 1 ? ' • EXECUTE' : ''}! ${dealt} damage to ${target.definition.name}.`);
+    this.finishAction();
   }
 
   private useSkill(): void {
-    if (!this.running || this.enemyHp <= 0) return;
+    if (!this.running) return;
+    const target = selectHeroTarget(this.selectedHero, this.enemies);
+    if (!target) return;
     const result = resolveHeroSkill(this.hero);
-    const execute = executeMultiplier(this.selectedHero, this.enemyHp, this.enemy.maxHp);
-    const rawDamage = Math.floor(result.primaryDamage * execute);
-    const damage = damageAfterArmor(rawDamage, this.enemy.armor);
-    this.enemyHp = applyDamage({ hp: this.enemyHp, maxHp: this.enemy.maxHp, attack: this.enemy.attack }, damage).hp;
+    const execute = executeMultiplier(this.selectedHero, target.hp, target.definition.maxHp);
+    const updatedPrimary = applyDamageToEnemy(target, Math.floor(result.primaryDamage * execute));
+    const primaryDamage = target.hp - updatedPrimary.hp;
+    this.enemies = replaceEnemy(this.enemies, updatedPrimary);
+    if (updatedPrimary.hp <= 0) this.onEnemyDefeated(updatedPrimary);
+
+    let splashTotal = 0;
+    const splashHits: string[] = [];
+    if (result.splashDamage > 0) {
+      const splashTargets = selectSplashTargets(this.enemies, target.id, this.hero.skillTargetCount);
+      splashTargets.forEach((secondary) => {
+        const updated = applyDamageToEnemy(secondary, result.splashDamage);
+        splashTotal += secondary.hp - updated.hp;
+        splashHits.push(secondary.definition.name);
+        this.enemies = replaceEnemy(this.enemies, updated);
+        this.flash(this.enemySprites.get(secondary.id), 1.11);
+        if (updated.hp <= 0) this.onEnemyDefeated(updated);
+      });
+    }
+
     if (result.shield > 0) this.warriorShield = Math.max(this.warriorShield, result.shield);
-    if (result.enemyDelayMs > 0 && this.running) this.scheduleEnemyAttack(this.enemy.attackIntervalMs + result.enemyDelayMs);
-    this.flash(this.enemySprite, result.critical ? 1.22 : 1.14);
-    const effects = [result.shield > 0 ? `shield +${result.shield}` : '', result.splashDamage > 0 ? `arcane splash ${result.splashDamage}` : '', result.enemyDelayMs > 0 ? `delay ${result.enemyDelayMs}ms` : '', execute > 1 ? 'EXECUTE' : ''].filter(Boolean).join(' • ');
-    this.statusText?.setText(`${result.label}! ${damage} damage${effects ? ` • ${effects}` : ''}`);
-    this.updateUi();
-    if (this.enemyHp <= 0) this.handleVictory();
+    if (result.enemyDelayMs > 0) {
+      livingEnemies(this.enemies).forEach((enemy) => this.scheduleEnemyAttack(enemy.id, enemy.definition.attackIntervalMs + result.enemyDelayMs));
+    }
+    this.flash(this.enemySprites.get(target.id), result.critical ? 1.22 : 1.14);
+    const effects = [
+      result.shield > 0 ? `shield +${result.shield}` : '',
+      splashHits.length > 0 ? `splash ${splashTotal} → ${splashHits.join(', ')}` : '',
+      result.enemyDelayMs > 0 ? `group delay ${result.enemyDelayMs}ms` : '',
+      execute > 1 ? 'EXECUTE' : '',
+    ].filter(Boolean).join(' • ');
+    this.statusText?.setText(`${result.label}! ${primaryDamage} to ${target.definition.name}${effects ? ` • ${effects}` : ''}`);
+    this.finishAction();
   }
 
-  private enemyAttack(): void {
+  private enemyAttack(enemyId: string): void {
     if (!this.running || this.heroHp <= 0) return;
-    let damage = incomingDamageForHero(this.selectedHero, this.enemy.attack);
+    const enemy = this.enemies.find((candidate) => candidate.id === enemyId && candidate.hp > 0);
+    if (!enemy) return;
+    let damage = incomingDamageForHero(this.selectedHero, enemy.definition.attack);
     const absorbed = Math.min(this.warriorShield, damage);
     this.warriorShield -= absorbed;
     damage -= absorbed;
     if (damage > 0) this.heroHp = applyDamage({ hp: this.heroHp, maxHp: this.hero.maxHp, attack: this.hero.attack }, damage).hp;
     this.flash(this.heroSprite, absorbed > 0 ? 1.04 : 1.08);
-    this.statusText?.setText(absorbed > 0 ? `${this.enemy.name} hits • shield absorbs ${absorbed}${damage > 0 ? ` • ${damage} HP damage` : ''}` : `${this.enemy.name} hits for ${damage}`);
+    this.statusText?.setText(absorbed > 0 ? `${enemy.definition.name} attacks • shield absorbs ${absorbed}${damage > 0 ? ` • ${damage} HP` : ''}` : `${enemy.definition.name} hits for ${damage}`);
     this.updateUi();
     if (this.heroHp <= 0) this.handleDefeat();
+  }
+
+  private onEnemyDefeated(enemy: EnemyCombatant): void {
+    this.enemyTimers.get(enemy.id)?.remove(false);
+    this.enemyTimers.delete(enemy.id);
+    this.enemySprites.get(enemy.id)?.setAlpha(0.25);
+    this.enemyHpTexts.get(enemy.id)?.setText(`${enemy.definition.name}\nDEFEATED`);
+  }
+
+  private finishAction(): void {
+    this.updateUi();
+    if (isGroupDefeated(this.enemies)) this.handleVictory();
   }
 
   private handleVictory(): void {
@@ -180,7 +247,7 @@ export class GameScene extends Phaser.Scene {
     this.saveData = { ...this.saveData, stage: this.stage, gold: this.saveData.gold + reward, selectedHero: this.selectedHero };
     saveGame(this.saveData);
     this.updateUi();
-    this.statusText?.setText(`Victory! ${this.enemy.name} defeated • +${reward} Gold • Stage ${this.stage} unlocked`);
+    this.statusText?.setText(`Group defeated! Stage ${completedStage} mastered • +${reward} Gold • Stage ${this.stage} unlocked`);
     this.nextStageTimer = this.time.delayedCall(1300, () => this.startBattle());
   }
 
@@ -190,7 +257,7 @@ export class GameScene extends Phaser.Scene {
     this.stopBattleTimers();
     this.saveData = { ...this.saveData, stage: this.stage, selectedHero: this.selectedHero };
     saveGame(this.saveData);
-    this.statusText?.setText('Defeat. Campaign wall held — retrying this stage…');
+    this.statusText?.setText('Defeat. Group state reset — retrying this stage…');
     this.nextStageTimer = this.time.delayedCall(1600, () => this.startBattle());
   }
 
@@ -215,8 +282,14 @@ export class GameScene extends Phaser.Scene {
   }
 
   private stopBattleTimers(): void {
-    this.heroAttackTimer?.remove(false); this.enemyAttackTimer?.remove(false); this.skillTimer?.remove(false); this.nextStageTimer?.remove(false);
-    this.heroAttackTimer = undefined; this.enemyAttackTimer = undefined; this.skillTimer = undefined; this.nextStageTimer = undefined;
+    this.heroAttackTimer?.remove(false);
+    this.skillTimer?.remove(false);
+    this.nextStageTimer?.remove(false);
+    this.enemyTimers.forEach((timer) => timer.remove(false));
+    this.enemyTimers.clear();
+    this.heroAttackTimer = undefined;
+    this.skillTimer = undefined;
+    this.nextStageTimer = undefined;
   }
 
   private updateUi(): void {
@@ -224,13 +297,19 @@ export class GameScene extends Phaser.Scene {
     const nextCost = heroUpgradeCost(level);
     this.goldText?.setText(`Gold: ${this.saveData.gold}`);
     this.levelText?.setText(`${this.hero.name} • Lv ${level} • ATK ${this.hero.attack} • HP ${this.hero.maxHp}`);
-    const upgradeText = this.registry.get('upgradeText') as Phaser.GameObjects.Text | undefined;
-    upgradeText?.setText(`UPGRADE ${this.hero.name} → Lv ${level + 1} • ${nextCost} Gold`);
+    this.upgradeText?.setText(`UPGRADE ${this.hero.name} → Lv ${level + 1} • ${nextCost} Gold`);
     this.skillText?.setText(`${this.hero.skillName} • ${this.hero.skillCooldownMs / 1000}s • ${this.hero.skillDescription}`);
     this.heroHpText?.setText(`${this.hero.name} ${Math.ceil(this.heroHp)} / ${this.hero.maxHp} HP${this.warriorShield > 0 ? ` • Shield ${this.warriorShield}` : ''}`);
-    this.enemyHpText?.setText(`${this.enemy.name} ${Math.ceil(this.enemyHp)} / ${this.enemy.maxHp} HP • ${this.enemy.trait}`);
-    if (this.heroBar) this.heroBar.width = 260 * Math.max(0, this.heroHp / this.hero.maxHp);
-    if (this.enemyBar) this.enemyBar.width = 260 * Math.max(0, this.enemyHp / this.enemy.maxHp);
+    if (this.heroBar) this.heroBar.width = 230 * Math.max(0, this.heroHp / this.hero.maxHp);
+
+    const target = selectHeroTarget(this.selectedHero, this.enemies);
+    this.targetText?.setText(target ? `Auto target: ${target.definition.name} • ${livingEnemies(this.enemies).length}/${this.enemies.length} enemies alive` : 'Enemy group defeated');
+    this.enemies.forEach((enemy) => {
+      const hpText = this.enemyHpTexts.get(enemy.id);
+      const bar = this.enemyBars.get(enemy.id);
+      hpText?.setText(enemy.hp > 0 ? `${enemy.definition.name}\n${Math.ceil(enemy.hp)}/${enemy.definition.maxHp} • ${enemy.definition.trait}` : `${enemy.definition.name}\nDEFEATED`);
+      if (bar) bar.width = 105 * Math.max(0, enemy.hp / enemy.definition.maxHp);
+    });
   }
 
   private flash(target?: Phaser.GameObjects.Container, scale = 1.08): void {
