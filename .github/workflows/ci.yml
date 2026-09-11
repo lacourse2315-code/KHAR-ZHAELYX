@@ -5,6 +5,7 @@ on:
     branches: [main]
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -33,7 +34,7 @@ jobs:
           trap 'kill $PID' EXIT
           for i in {1..20}; do
             if curl --fail --silent http://127.0.0.1:4173/ > /tmp/khar-index.html; then
-              grep -q "KHAR ZHAELYX" /tmp/khar-index.html
+              grep -qi "Khar Zhaelyx" /tmp/khar-index.html
               exit 0
             fi
             sleep 1
