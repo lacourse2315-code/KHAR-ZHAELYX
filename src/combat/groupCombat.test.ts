@@ -1,0 +1,45 @@
+import { describe, expect, it } from 'vitest';
+import { HEROES } from '../data/heroes';
+import { applyDamageToEnemy, buildEnemyGroup, isGroupDefeated, replaceEnemy, selectHeroTarget, selectSplashTargets } from './groupCombat';
+
+describe('enemy groups', () => {
+  it('builds deterministic groups of 1, 2 and 3 enemies', () => {
+    expect(buildEnemyGroup(1)).toHaveLength(1);
+    expect(buildEnemyGroup(2)).toHaveLength(2);
+    expect(buildEnemyGroup(3)).toHaveLength(3);
+    expect(buildEnemyGroup(8).map((enemy) => enemy.id)).toEqual([
+      'stage-8-enemy-1', 'stage-8-enemy-2', 'stage-8-enemy-3',
+    ]);
+  });
+
+  it('ignores dead enemies and only wins when the whole group is dead', () => {
+    const group = buildEnemyGroup(3);
+    const firstDead = replaceEnemy(group, { ...group[0], hp: 0 });
+    expect(selectHeroTarget('warrior', firstDead)?.id).toBe(group[1].id);
+    expect(isGroupDefeated(firstDead)).toBe(false);
+    const allDead = firstDead.map((enemy) => ({ ...enemy, hp: 0 }));
+    expect(isGroupDefeated(allDead)).toBe(true);
+  });
+
+  it('uses deterministic hero targeting rules', () => {
+    const group = buildEnemyGroup(3);
+    const wounded = replaceEnemy(group, { ...group[2], hp: 1 });
+    expect(selectHeroTarget('warrior', wounded)?.id).toBe(group[0].id);
+    expect(selectHeroTarget('mage', wounded)?.id).toBe(group[0].id);
+    expect(selectHeroTarget('assassin', wounded)?.id).toBe(group[2].id);
+    const rangerTarget = selectHeroTarget('ranger', wounded);
+    const fastest = [...wounded].sort((a, b) => a.definition.attackIntervalMs - b.definition.attackIntervalMs || a.hp - b.hp || a.id.localeCompare(b.id))[0];
+    expect(rangerTarget?.id).toBe(fastest.id);
+  });
+
+  it('applies Mage splash only to living secondary targets within targetCount', () => {
+    const group = buildEnemyGroup(3);
+    const primary = group[0];
+    const withDeadMiddle = replaceEnemy(group, { ...group[1], hp: 0 });
+    const splashTargets = selectSplashTargets(withDeadMiddle, primary.id, HEROES.mage.skillTargetCount);
+    expect(splashTargets.map((enemy) => enemy.id)).toEqual([group[2].id]);
+    const damaged = applyDamageToEnemy(splashTargets[0], 20);
+    expect(damaged.hp).toBeLessThan(splashTargets[0].hp);
+    expect(withDeadMiddle[1].hp).toBe(0);
+  });
+});
