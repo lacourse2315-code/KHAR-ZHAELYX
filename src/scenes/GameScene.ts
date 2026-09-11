@@ -2,11 +2,14 @@ import Phaser from 'phaser';
 import { getEnemyForStage, type EnemyDefinition } from '../data/enemies';
 import { HEROES, HERO_ORDER, type HeroDefinition, type HeroId } from '../data/heroes';
 import { applyDamage, isDefeated, scaledSkillDamage } from '../combat/combatMath';
-import { loadSave, saveGame } from '../systems/saveSystem';
+import { calculateOfflineReward } from '../systems/idleSystem';
+import { buyHeroUpgrade, getHeroLevel, getUpgradedHero, heroUpgradeCost, rewardForStage } from '../systems/progressionSystem';
+import { loadSave, saveGame, type SaveData } from '../systems/saveSystem';
 
 export class GameScene extends Phaser.Scene {
   private stage = 1;
   private selectedHero: HeroId = 'warrior';
+  private saveData!: SaveData;
   private hero!: HeroDefinition;
   private enemy!: EnemyDefinition;
   private heroHp = 1;
@@ -18,66 +21,84 @@ export class GameScene extends Phaser.Scene {
   private heroHpText?: Phaser.GameObjects.Text;
   private enemyHpText?: Phaser.GameObjects.Text;
   private stageText?: Phaser.GameObjects.Text;
+  private goldText?: Phaser.GameObjects.Text;
+  private levelText?: Phaser.GameObjects.Text;
+  private upgradeText?: Phaser.GameObjects.Text;
   private statusText?: Phaser.GameObjects.Text;
   private heroBar?: Phaser.GameObjects.Rectangle;
   private enemyBar?: Phaser.GameObjects.Rectangle;
   private heroSprite?: Phaser.GameObjects.Container;
   private enemySprite?: Phaser.GameObjects.Container;
   private running = false;
+  private offlineGold = 0;
 
   constructor() { super('GameScene'); }
 
   init(data: { stage?: number; selectedHero?: HeroId }): void {
-    const save = loadSave();
-    this.stage = Math.max(1, data.stage ?? save.stage);
-    this.selectedHero = data.selectedHero ?? save.selectedHero;
+    const now = Date.now();
+    this.saveData = loadSave(undefined, now);
+    this.stage = Math.max(1, data.stage ?? this.saveData.stage);
+    this.selectedHero = data.selectedHero ?? this.saveData.selectedHero;
+    const offline = calculateOfflineReward(this.stage, this.saveData.lastSavedAt, now);
+    this.offlineGold = offline.gold;
+    this.saveData = {
+      ...this.saveData,
+      stage: this.stage,
+      selectedHero: this.selectedHero,
+      gold: this.saveData.gold + offline.gold,
+    };
+    saveGame(this.saveData, undefined, now);
   }
 
   create(): void {
     this.cameras.main.setBackgroundColor('#090c14');
     this.buildUi();
     this.startBattle();
+    if (this.offlineGold > 0) this.statusText?.setText(`Offline farming: +${this.offlineGold} Gold from mastered stages.`);
   }
 
   shutdown(): void {
     this.stopBattleTimers();
+    if (this.saveData) saveGame(this.saveData);
   }
 
   private buildUi(): void {
     this.add.rectangle(480, 270, 960, 540, 0x090c14);
-    this.add.text(32, 24, 'KHAR ZHAELYX', { fontFamily: 'Georgia, serif', fontSize: '25px', color: '#f4f0e6', fontStyle: 'bold' });
-    this.stageText = this.add.text(928, 30, '', { fontSize: '17px', color: '#e5c77a' }).setOrigin(1, 0);
-    this.statusText = this.add.text(480, 78, 'Preparing battle…', { fontSize: '16px', color: '#9fa8bb' }).setOrigin(0.5);
+    this.add.text(32, 20, 'KHAR ZHAELYX', { fontFamily: 'Georgia, serif', fontSize: '24px', color: '#f4f0e6', fontStyle: 'bold' });
+    this.goldText = this.add.text(32, 52, '', { fontSize: '15px', color: '#e5c77a' });
+    this.levelText = this.add.text(928, 52, '', { fontSize: '15px', color: '#9fa8bb' }).setOrigin(1, 0);
+    this.stageText = this.add.text(928, 20, '', { fontSize: '17px', color: '#e5c77a' }).setOrigin(1, 0);
+    this.statusText = this.add.text(480, 82, 'Preparing battle…', { fontSize: '16px', color: '#9fa8bb' }).setOrigin(0.5);
 
-    this.add.text(220, 118, 'HERO', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
-    this.add.text(740, 118, 'ENEMY', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
+    this.add.text(220, 116, 'HERO', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
+    this.add.text(740, 116, 'ENEMY', { fontSize: '13px', color: '#7f899f', fontStyle: 'bold' }).setOrigin(0.5);
+    this.heroSprite = this.createFighter(220, 230, 0x38506d, 'H');
+    this.enemySprite = this.createFighter(740, 230, 0x623c3c, 'E');
+    this.heroHpText = this.add.text(220, 305, '', { fontSize: '15px', color: '#e8edf7' }).setOrigin(0.5);
+    this.enemyHpText = this.add.text(740, 305, '', { fontSize: '15px', color: '#e8edf7' }).setOrigin(0.5);
+    this.heroBar = this.add.rectangle(220, 332, 260, 14, 0x274231).setOrigin(0.5).setStrokeStyle(1, 0x5f8069);
+    this.enemyBar = this.add.rectangle(740, 332, 260, 14, 0x4b2929).setOrigin(0.5).setStrokeStyle(1, 0x8f5a5a);
 
-    this.heroSprite = this.createFighter(220, 235, 0x38506d, 'H');
-    this.enemySprite = this.createFighter(740, 235, 0x623c3c, 'E');
+    this.add.text(480, 360, 'AUTO COMBAT', { fontSize: '17px', color: '#e5c77a', fontStyle: 'bold' }).setOrigin(0.5);
+    this.add.text(480, 382, 'Win → Gold → Upgrade → Push farther', { fontSize: '12px', color: '#7f899f' }).setOrigin(0.5);
 
-    this.heroHpText = this.add.text(220, 310, '', { fontSize: '15px', color: '#e8edf7' }).setOrigin(0.5);
-    this.enemyHpText = this.add.text(740, 310, '', { fontSize: '15px', color: '#e8edf7' }).setOrigin(0.5);
-    this.heroBar = this.add.rectangle(220, 338, 260, 14, 0x274231).setOrigin(0.5).setStrokeStyle(1, 0x5f8069);
-    this.enemyBar = this.add.rectangle(740, 338, 260, 14, 0x4b2929).setOrigin(0.5).setStrokeStyle(1, 0x8f5a5a);
+    const upgrade = this.add.rectangle(480, 415, 310, 44, 0x4f3c20, 1).setStrokeStyle(1, 0xe5c77a).setInteractive({ useHandCursor: true });
+    this.upgradeText = this.add.text(480, 415, '', { fontSize: '14px', color: '#fff4d0', fontStyle: 'bold' }).setOrigin(0.5);
+    upgrade.on('pointerdown', () => this.upgradeSelectedHero());
 
-    this.add.text(480, 380, 'AUTO COMBAT', { fontSize: '18px', color: '#e5c77a', fontStyle: 'bold' }).setOrigin(0.5);
-    this.add.text(480, 408, 'Attacks and skills trigger automatically.', { fontSize: '13px', color: '#7f899f' }).setOrigin(0.5);
+    HERO_ORDER.forEach((id, index) => this.createHeroButton(id, 115 + index * 230));
 
-    const buttons = HERO_ORDER.map((id, index) => this.createHeroButton(id, 115 + index * 230));
-    void buttons;
-
-    const retreat = this.add.text(480, 510, 'Return to title', { fontSize: '13px', color: '#7f899f' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    const retreat = this.add.text(480, 526, 'Return to title', { fontSize: '12px', color: '#7f899f' }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     retreat.on('pointerdown', () => this.scene.start('TitleScene'));
   }
 
-  private createHeroButton(id: HeroId, x: number): Phaser.GameObjects.Rectangle {
-    const button = this.add.rectangle(x, 462, 200, 55, 0x151b28, 1).setStrokeStyle(1, 0x3d465a).setInteractive({ useHandCursor: true });
-    this.add.text(x, 451, HEROES[id].name, { fontSize: '15px', color: '#f4f0e6', fontStyle: 'bold' }).setOrigin(0.5);
-    this.add.text(x, 473, HEROES[id].role, { fontSize: '10px', color: '#7f899f' }).setOrigin(0.5);
+  private createHeroButton(id: HeroId, x: number): void {
+    const button = this.add.rectangle(x, 478, 200, 52, 0x151b28, 1).setStrokeStyle(1, 0x3d465a).setInteractive({ useHandCursor: true });
+    this.add.text(x, 468, HEROES[id].name, { fontSize: '14px', color: '#f4f0e6', fontStyle: 'bold' }).setOrigin(0.5);
+    this.add.text(x, 489, HEROES[id].role, { fontSize: '10px', color: '#7f899f' }).setOrigin(0.5);
     button.on('pointerdown', () => {
       if (this.running && id !== this.selectedHero) this.switchHero(id);
     });
-    return button;
   }
 
   private createFighter(x: number, y: number, fill: number, letter: string): Phaser.GameObjects.Container {
@@ -90,7 +111,8 @@ export class GameScene extends Phaser.Scene {
 
   private startBattle(): void {
     this.stopBattleTimers();
-    this.hero = HEROES[this.selectedHero];
+    const level = getHeroLevel(this.saveData.heroLevels, this.selectedHero);
+    this.hero = getUpgradedHero(HEROES[this.selectedHero], level);
     this.enemy = getEnemyForStage(this.stage);
     this.heroHp = this.hero.maxHp;
     this.enemyHp = this.enemy.maxHp;
@@ -141,9 +163,12 @@ export class GameScene extends Phaser.Scene {
     this.running = false;
     this.stopBattleTimers();
     const completedStage = this.stage;
+    const reward = rewardForStage(completedStage);
     this.stage += 1;
-    saveGame({ stage: this.stage, selectedHero: this.selectedHero });
-    this.statusText?.setText(`Victory! Stage ${completedStage} cleared.`);
+    this.saveData = { ...this.saveData, stage: this.stage, gold: this.saveData.gold + reward, selectedHero: this.selectedHero };
+    saveGame(this.saveData);
+    this.updateUi();
+    this.statusText?.setText(`Victory! Stage ${completedStage} mastered • +${reward} Gold`);
     this.nextStageTimer = this.time.delayedCall(1300, () => this.startBattle());
   }
 
@@ -151,14 +176,36 @@ export class GameScene extends Phaser.Scene {
     if (!this.running) return;
     this.running = false;
     this.stopBattleTimers();
-    saveGame({ stage: this.stage, selectedHero: this.selectedHero });
-    this.statusText?.setText('Defeat. Retrying automatically…');
+    this.saveData = { ...this.saveData, stage: this.stage, selectedHero: this.selectedHero };
+    saveGame(this.saveData);
+    this.statusText?.setText('Defeat. Campaign wall held — retrying this stage…');
     this.nextStageTimer = this.time.delayedCall(1600, () => this.startBattle());
+  }
+
+  private upgradeSelectedHero(): void {
+    const level = getHeroLevel(this.saveData.heroLevels, this.selectedHero);
+    const result = buyHeroUpgrade(this.saveData.gold, level);
+    if (!result.success) {
+      this.statusText?.setText(`Need ${result.cost} Gold to upgrade ${HEROES[this.selectedHero].name}.`);
+      return;
+    }
+    this.saveData = {
+      ...this.saveData,
+      gold: result.gold,
+      heroLevels: { ...this.saveData.heroLevels, [this.selectedHero]: result.level },
+    };
+    saveGame(this.saveData);
+    const hpRatio = this.heroHp / this.hero.maxHp;
+    this.hero = getUpgradedHero(HEROES[this.selectedHero], result.level);
+    this.heroHp = Math.max(1, Math.round(this.hero.maxHp * hpRatio));
+    this.updateUi();
+    this.statusText?.setText(`${this.hero.name} upgraded to Level ${result.level}! Combat power increased.`);
   }
 
   private switchHero(id: HeroId): void {
     this.selectedHero = id;
-    saveGame({ stage: this.stage, selectedHero: id });
+    this.saveData = { ...this.saveData, stage: this.stage, selectedHero: id };
+    saveGame(this.saveData);
     this.startBattle();
   }
 
@@ -174,6 +221,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateUi(): void {
+    const level = getHeroLevel(this.saveData.heroLevels, this.selectedHero);
+    const nextCost = heroUpgradeCost(level);
+    this.goldText?.setText(`Gold: ${this.saveData.gold}`);
+    this.levelText?.setText(`${this.hero.name} • Lv ${level} • ATK ${this.hero.attack}`);
+    this.upgradeText?.setText(`UPGRADE ${this.hero.name} → Lv ${level + 1}  •  ${nextCost} Gold`);
     this.heroHpText?.setText(`${this.hero.name}  ${Math.ceil(this.heroHp)} / ${this.hero.maxHp} HP`);
     this.enemyHpText?.setText(`${this.enemy.name}  ${Math.ceil(this.enemyHp)} / ${this.enemy.maxHp} HP`);
     if (this.heroBar) this.heroBar.width = 260 * Math.max(0, this.heroHp / this.hero.maxHp);
