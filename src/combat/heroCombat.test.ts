@@ -8,10 +8,10 @@ describe('hero combat identities', () => {
     expect(resolveHeroSkill(HEROES.warrior).shield).toBeGreaterThan(0);
   });
 
-  it('Mage Arcane Burst deals splash damage and delays the enemy', () => {
+  it('Mage Arcane Burst deals splash damage and keeps the canonical control delay', () => {
     const skill = resolveHeroSkill(HEROES.mage);
     expect(skill.splashDamage).toBeGreaterThan(0);
-    expect(skill.enemyDelayMs).toBeGreaterThan(0);
+    expect(skill.enemyDelayMs).toBe(950);
   });
 
   it('Ranger has a reliable critical specialization and Deadeye crits', () => {
