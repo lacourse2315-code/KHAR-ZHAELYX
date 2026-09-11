@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HEROES } from '../data/heroes';
+import { damageAfterArmor } from '../data/enemies';
 import { resolveHeroSkill } from './heroCombat';
 import { applyDamageToEnemy, buildEnemyGroup, isGroupDefeated, replaceEnemy, selectHeroTarget, selectSplashTargets } from './groupCombat';
 
@@ -41,6 +42,8 @@ describe('enemy groups', () => {
     if (!primary) throw new Error('Expected a living primary target');
 
     const hpBefore = group.map((enemy) => enemy.hp);
+    const expectedPrimaryDamage = damageAfterArmor(mageSkill.primaryDamage, group[0].definition.armor);
+    const expectedSplashDamage = damageAfterArmor(mageSkill.splashDamage, group[1].definition.armor);
     const updatedPrimary = applyDamageToEnemy(primary, mageSkill.primaryDamage);
     group = replaceEnemy(group, updatedPrimary);
 
@@ -50,8 +53,8 @@ describe('enemy groups', () => {
       group = replaceEnemy(group, applyDamageToEnemy(secondary, mageSkill.splashDamage));
     }
 
-    expect(group[0].hp).toBeLessThan(hpBefore[0]);
-    expect(group[1].hp).toBeLessThan(hpBefore[1]);
+    expect(hpBefore[0] - group[0].hp).toBe(expectedPrimaryDamage);
+    expect(hpBefore[1] - group[1].hp).toBe(expectedSplashDamage);
     expect(group[2].hp).toBe(hpBefore[2]);
     expect(mageSkill.enemyDelayMs).toBe(950);
   });
